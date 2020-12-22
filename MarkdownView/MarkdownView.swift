@@ -140,7 +140,7 @@ public extension MarkdownView {
     public func getContentHeight(complete: ((_ height: CGFloat) -> Void)?) -> Void {
         // 该处的问题是：参考WKNavigationDelegate里
         
-        DispatchQueue.main.asyncAfter(deadline: DispatchTime.now() + 5.0) {
+        DispatchQueue.main.asyncAfter(deadline: DispatchTime.now() + 2.0) {
             //let script: String = "document.getElementById(\'testDiv\').offsetTop"
             //let script = "document.body.scrollHeight;"
             let script = "document.body.offsetHeight;"
