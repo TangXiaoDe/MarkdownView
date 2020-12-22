@@ -5,6 +5,10 @@ import WebKit
  Markdown View for iOS.
  
  - Note: [How to get height of entire document with javascript](https://stackoverflow.com/questions/1145850/how-to-get-height-of-entire-document-with-javascript)
+ 
+ 注意加载内容写法：
+ let content = String.init(format: "<meta content=\"width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=0;\" name=\"viewport\" />%@<div id=\"testDiv\" style = \"height:10px; width:100px\"></div>", model.business_description)
+ 
  */
 open class MarkdownView: UIView {
 
@@ -28,6 +32,12 @@ open class MarkdownView: UIView {
 
   public var onRendered: ((CGFloat) -> Void)?
 
+    
+    @objc public var onHeightChanged: ((CGFloat) -> Void)?
+    fileprivate var lastHeight: CGFloat = 0
+    @objc public var myContent = 0
+
+
   public convenience init() {
     self.init(frame: CGRect.zero)
   }
@@ -39,6 +49,10 @@ open class MarkdownView: UIView {
   public required init?(coder aDecoder: NSCoder) {
     super.init(coder: aDecoder)
   }
+    
+    deinit {
+        self.webView?.scrollView.removeObserver(self, forKeyPath: "contentSize", context: nil)
+    }
 
   open override var intrinsicContentSize: CGSize {
     if let height = self.intrinsicContentHeight {
@@ -51,6 +65,8 @@ open class MarkdownView: UIView {
   public func load(markdown: String?, enableImage: Bool = true) {
     guard let markdown = markdown else { return }
 
+    self.webView?.scrollView.removeObserver(self, forKeyPath: "contentSize", context: nil)
+    
     let bundle = Bundle(for: MarkdownView.self)
 
     let htmlURL: URL? =
@@ -88,6 +104,9 @@ open class MarkdownView: UIView {
       self.webView = wv
 
       wv.load(templateRequest)
+        
+        self.webView?.scrollView.addObserver(self, forKeyPath: "contentSize", options: NSKeyValueObservingOptions.new, context: nil)
+        
     } else {
       // TODO: raise error
     }
@@ -96,21 +115,90 @@ open class MarkdownView: UIView {
   private func escape(markdown: String) -> String? {
     return markdown.addingPercentEncoding(withAllowedCharacters: CharacterSet.alphanumerics)
   }
+    
+
+    open override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
+        // 注：该方案的异常问题是：当显示MarkdownView时延迟几秒调用getContentHeight后会同步更新，但如果不调用就不自动更新。
+        guard let keyPath = keyPath, keyPath == "contentSize", let webView = self.webView else {
+            return
+        }
+        let height: CGFloat = webView.scrollView.contentSize.height ?? 0
+        // 防止滚动一直刷新，出现闪屏
+        if abs(height - lastHeight) > 0.000001 {
+            self.onHeightChanged?(height)
+            lastHeight = height
+            print("MarkdownView observeValue of change context, newHeight: \(height)")
+        }
+    }
+
 
 }
+
+
+public extension MarkdownView {
+
+    public func getContentHeight(complete: ((_ height: CGFloat) -> Void)?) -> Void {
+        // 该处的问题是：参考WKNavigationDelegate里
+        
+        DispatchQueue.main.asyncAfter(deadline: DispatchTime.now() + 5.0) {
+            //let script: String = "document.getElementById(\'testDiv\').offsetTop"
+            //let script = "document.body.scrollHeight;"
+            let script = "document.body.offsetHeight;"
+            self.webView?.evaluateJavaScript(script) { [weak self] result, error in
+                if let _ = error { return }
+                if let height = result as? CGFloat {
+                    complete?(height)
+                    print("MarkdownView getContentHeight \(height)")
+                }
+            }
+        }
+    }
+
+}
+
 
 extension MarkdownView: WKNavigationDelegate {
 
   public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-    let script = "document.body.scrollHeight;"
+    // 该处的问题是：
+    //  1. 如果该MarkdownView未显示在屏幕上时，获取的高度不正确；
+    //  2. 即使显示在屏幕上，也应延迟几秒调用，否则获取的高度也不正确；
+    
+    // 方法一：js
+    //let script = "document.body.scrollHeight;"
+    let script = "document.body.offsetHeight;"
+    //let script: String = "document.getElementById(\'testDiv\').offsetTop"
     webView.evaluateJavaScript(script) { [weak self] result, error in
       if let _ = error { return }
 
       if let height = result as? CGFloat {
         self?.onRendered?(height)
         self?.intrinsicContentHeight = height
+        print("MarkdownView webView didFinish \(height)")
       }
     }
+
+
+//    // 方法二: sizeToFit
+//    webView.sizeToFit()
+//    let height: CGFloat = webView.scrollView.contentSize.height
+////    self.onRendered?(height)
+////    self.intrinsicContentHeight = height
+//    print("MarkdownView webView didFinish \(height)")
+
+
+//    // 方法三:遍历WKWebView的所有子视图，找到中间的WKContentView,获取到它的frame设定给webView
+//    for view in webView.scrollView.subviews {
+//        if let view = view as? WKContentView {
+//
+//        }
+//        print(view.description)
+//        print(view.bounds)
+//    }
+
+    
+    // 方法四：给页面底部添加控件，获取其顶部高度，参考方法1的中js，该方法必须在加载内容时注意控件；
+
   }
 
   public func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
